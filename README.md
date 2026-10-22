@@ -1,0 +1,163 @@
+# 表盘工坊（网页版）
+
+GIF / 视频 → 小米手环 11 动态表盘 `.face`，**纯前端，不依赖 `Compiler.exe`，也不生成 `.fprj`**。
+
+官方链路是「Vela IDE → 手写 Lua/XML → 跑 `Compiler.exe` 打包」。这里把最后一步用纯代码
+重写了一遍：容器布局（文件头 / Title / 元数据槽 / 索引表 / 描述块 / 数据区 / 尾部
+212×520 预览位图）已完整逆向，打包就是字节搬运。
+
+线上：<https://miband-watchface.app.workbuddy.host/?sharecode=6EL323Y5Q5>
+
+## 为什么这份实现敢说自己产出的是真表盘
+
+不是"我觉得应该长这样"，是逐字节对拍出来的：
+
+| 验证 | 内容 | 状态 |
+|---|---|---|
+| 同参数双跑 | 同一套参数分别走 `Compiler.exe` 与纯代码版，`cmp` 逐字节比对 | ✅ 5/5 零差异 |
+| 往返回归 | 5 份**官方编译器产物**拆开再用本仓库的打包器拼回去，逐字节一致 | ✅ 5/5 |
+| 样本覆盖 | 单壁纸 P256 / AOD 时间 / AOD 时间+日期+主屏日期 / 三壁纸+cycle / JPEG q80 | ✅ |
+| 结构校验 | 用原仓库的 `tools/verify_face.py` 独立验产物：帧数、Lua 引用、帧率、屏数、尾部尺寸 | ✅ 结构正确 |
+| Lua 语法 | 产物里的 `main.lua` 过 `luaparser` | ✅ |
+| PNG 可解码 | 产物里的帧图用 **Pillow** 逐张打开，模式 `P`、尺寸 212×520 | ✅ |
+| AOD 结构 | 带息屏的产物过 `verify_face.py`：屏数 2、索引表 360、描述块分组条数正确 | ✅ |
+| 描述块顺序 | 产物里 tag 序列单调 锚(0x0000) → 位图(0x0200) → 数组(0x0300) → 小件(0x0700) | ✅ |
+| 预览通道序 | 尾部位图与官方产物的通道均值完全一致（BGRA 直通 alpha） | ✅ |
+| 字段编码 | Title(16 B) / ID(10 B) 是定长 ASCII：非 ASCII 逐码点替换成 `?`，与 PC 端 `encode("ascii","replace")` 逐字节相同 | ✅ |
+| Node 侧烟雾 | `build_face` / `aod_build` / `multi_wall` 三个脚本自带断言，零参数可直接跑 | ✅ 全绿 |
+| UI 端到端 | 真浏览器（Edge）选 GIF → 点生成 → 接下载 → 校验 | ✅ |
+| 多壁纸端到端 | 多选 3 张 → 列表 → 点页换预览 → 删一页 → 生成，产物 `lua/face×8 · lua/w2×12` | ✅ |
+| 视频输入端到端 | mp4 + GIF 混排 → 抽 36 + 8 帧 → 生成 → `verify_face.py` + Pillow 逐帧 | ✅ |
+| 手机窄屏 | 390 / 375 px 下 `scrollWidth == clientWidth`，无横向溢出 | ✅ |
+
+官方样本（`G1`–`G5`）由本机 `Compiler.exe` 现场生成、放在仓库外的会话 scratch 里
+（仓库规矩：不提交 `*.face` 产物），`tests/golden-src/` 里只有合成素材。
+
+> ⚠️ 别把 `face-exp/out` 那批一起当回归基线：那里混着 10-01 AOD 分层实验期的产物
+> （只有锚点记录、没位图的空壳 AOD），形状不在本打包器覆盖范围内。
+> `tests/roundtrip.mjs` 默认只跑 `face-exp/pc-golden`。
+
+### 两个文档里没写过的坑
+
+**多壁纸时描述块哨兵的 `idx` 不是 `n-1`，而是第一页的帧数。**
+实测：第一页 2 帧 / 第二页 6 帧 / 第三页 4 帧 → 哨兵 `idx = 2`；单壁纸时它恰好等于
+`n-1`，所以只测单壁纸永远发现不了。设备侧看起来不用这个字段，但要逐字节一致就得照抄。
+
+**索引表按文件名升序排，不是"帧在前、lua 最后"。**
+实际顺序是 `lua/face_*` → `lua/main.lua` → `lua/w2_*` → `lua/w3_*`。按「帧在前、lua 最后」
+打包，产物照样能用，但和官方字节对不上 —— 这种"能用但不一致"最难发现。
+
+## 跑起来
+
+```bash
+node tests/serve.mjs 8765      # 起个静态服务
+# 浏览器打开 http://127.0.0.1:8765
+```
+
+不需要 `npm install`：所有核心代码零依赖，`CompressionStream('deflate')` 提供 PNG 需要的
+zlib 流。
+
+## 结构
+
+```
+index.html / style.css / app.js     界面（预览、参数、体积预算）
+src/worker.js                       生成任务跑在 Worker 里，避免几百帧卡界面
+src/core/gif.js                     GIF 解码（LZW + disposal 2/3 + 透明索引）
+src/core/video.js                   视频抽帧（seek + drawImage，必须在主线程）
+src/core/image.js                   居中裁剪 + 面积平均缩放
+src/core/quantize.js                中位切分调色板（+ 可选 Floyd–Steinberg）
+src/core/png.js                     调色板 PNG 编码（IHDR/PLTE/IDAT/IEND + CRC32）
+src/core/lua.js                     main.lua 生成（时间/日期、省电双钩子、点击）
+src/core/facebin.js                 .face 打包 + 解包（唯一需要精度的部分）
+src/core/build.js                   端到端编排（素材统一收敛成「n 帧 RGBA + 播放节奏」）
+tests/                              逐字节回归、结构检查、UI 端到端、本地服务
+```
+
+## 验证怎么跑
+
+```bash
+# 0. 容器 / 结构（零依赖，不需要浏览器）
+node tests/build_face.mjs            # 单壁纸全链路，自带描述块、帧数、哨兵断言
+node tests/aod_build.mjs             # AOD 描述块分组顺序 + 体积增量估算
+node tests/multi_wall.mjs            # 三壁纸：页数 / 帧分配 / 哨兵 idx / Lua WALLS
+node tests/roundtrip.mjs             # 往返拆包-重打包（需 face-exp/pc-golden 样本）
+
+# 1. 结构校验（用原仓库的独立工具）
+python ../miband11-watchface-maker/tools/verify_face.py out/MyFace.face
+
+# 2. 浏览器端到端（需要 playwright + 系统 Edge）
+node tests/serve.mjs 8765 &
+node tests/ui_smoke.mjs              # 单 GIF 冒烟
+node tests/ui_multi.mjs              # 多壁纸：多选 / 选页 / 删除 / 生成
+node tests/ui_video.mjs              # 视频+GIF 混排，抽帧后逐帧用 Pillow 验
+node tests/mobile_shot.mjs           # 390 / 375 px 截图 + 横向溢出检测
+```
+
+`ui_multi` / `ui_video` 都支持 `BASE=https://...` 直接打线上地址 —— 上线后跑一遍，
+才能证明"线上就是本地这份"，而不是只在本地能跑。
+`PW` / `PY` 环境变量可覆盖 playwright 与 python 路径（默认取本机托管安装）。
+
+## 素材：GIF 与视频
+
+- 拖入时按类型自动分流：`.gif` 走本模块自己的 LZW 解码，`.mp4/.webm/.mov/...` 走视频抽帧。
+- 视频**只在点「生成」时抽帧**，加载阶段只解码出首帧当预览（下面标一个「视频 · 点生成时抽帧」角标）。
+- 抽帧发生在**主线程**：Worker 里没有 `<video>`。抽完的 RGBA 帧按 Transferable 交给 Worker 编码，
+  零拷贝。
+- 抽帧方式是 **seek + `drawImage`**，不是顺序播放。总耗时只和帧数有关，和视频长度无关 ——
+  3 秒和 3 分钟的视频抽 36 帧，用时一样。
+- 选帧规则和 GIF 完全一致（`planUniform`）：等间隔取，帧数触顶就**降帧率、保住时长**。
+
+## 多壁纸（一个表盘里放几套动画，短按切换）
+
+- 选素材时**一次多选**：第 1 张落在 `lua/face*`，第 2 张起分别是 `lua/w2*`、`lua/w3*`……
+- 每张壁纸**独立选帧**（同一套目标帧率/帧数上限），列表里显示各自帧数，点哪行预览就切哪张。
+- 壁纸 ≥ 2 张时**自动开短按切换**（`tap: cycle`），否则第二张起在表上永远看不到。
+- 顺序 = 选择顺序，删除用行尾 `✕`，删完立刻重算帧数与体积。
+- GIF 和视频可以混排，不需要统一类型。
+
+Lua 侧的切换是 `onevent(PRESSED/CLICKED)` + 换图索引，不依赖任何系统 App 跳转
+（手环 11 的编译器不解析 `btn[...]` 语义，那条路是死的）。
+
+## 已支持 AOD 息屏
+
+息屏屏不支持 Lua，只能靠 `Shape=30`（静态图）与 `Shape=32`（数字位图 + `Value_Src`）驱动。
+当前实现：时分两位数字（46×64）+ 冒号小图，可加月日（20×28），颜色/纵向位置可调，
+默认不放全屏黑底（AMOLED 黑像素不发光，省下 431 KB）。
+
+数字字形是**浏览器实时渲染**成灰度遮罩再乘目标色，不打包任何字体文件 ——
+桌面版那份内嵌字库的授权来源，这里天然绕开了。
+
+实测代价：时间 **+130 KB** 左右（11 张 46×64 位图 ≈ 127 KB + 冒号 + 描述块），
+加日期再 +25 KB。
+
+## 还没做
+
+- **JPEG 帧**：浏览器 `canvas.toBlob` 固定 4:2:0 色度子采样，比官方链路的 4:4:4 差
+  （体积只小 19%，色度 PSNR 掉 2.5 dB），所以当前只出 P64/P128/P256 的无损 PNG。
+- **长视频截取**：现在整段抽帧，超过 96 帧就自动降帧率。想要"只取其中 6 秒"得先自己剪。
+
+## 踩过的坑（给后来改代码的人）
+
+1. **PNG 每个 chunk 多发 4 个零字节**：`chunk()` 里按 `8 + body + 4` 分配，正确是 `4 + body + 4`。
+   产出的图是**坏图**，但 `verify_face.py` 只查结构、不解码 PNG，所以一路绿灯 ——
+   是靠 Pillow 打开时才发现。改 PNG 编码相关代码后，务必用 Pillow 真开一遍。
+2. **GIF 逻辑屏幕描述符**：`packed` 之后是 1 字节背景索引 + 1 字节像素宽高比，别多跳一个。
+3. **多壁纸的哨兵 idx**：见上文，不是 `n-1`。
+4. **尾部预览块头是 12 字节**，结构 `<IHHI`（u32 零 + u16 宽 + u16 高 + u32 长度）。
+   写成 `<HHHI` 会短 2 字节，5 份样本全部差 `-2`。
+5. **判断"预览换没换"不能用全画面平均差**：大面积同色底会把差异吃掉。用**变化像素占比**
+   （任一通道差 > 24 记为变化，占比 < 1% 才算没变）。这个坑让 `ui_multi` 假红过一次。
+6. **Title / ID 是定长 ASCII 字段，别用 `TextEncoder` 写。** Title 只有 16 字节，
+   一个汉字占 3 字节，超长会被截在半个汉字上，产物里留下非法 UTF-8；而且两端（JS / Python）
+   从此不一样。正确做法是**逐码点**判断，非 ASCII 换成一个 `?` —— 与 PC 端
+   `s.encode("ascii","replace")` 的结果完全相同（`表盘Ab` → `??Ab`）。
+   浏览器这边多一层：`maxlength="16"` 数的是**字符**不是字节，中文照样能超，所以
+   生成前还要按字节截断。
+7. **`seekTo` 的超时兜底不能当成功。** 800 ms 没等到 `seeked` 就 `drawImage`，画的是
+   **上一帧** —— 产出一堆重复帧，但文件结构完全正常，事后极难发现。超时后必须回头核
+   `currentTime` 有没有真的跳到目标位置，没到就重试一次、再不行就报错。
+
+## 体积的两条硬结论（沿用原项目实测）
+
+- `.face` 有 **431 KB 固定开销**（212×520 RGBA8888 尾部预览位图），帧数再少也压不下去。
+- 体积主杠杆是**帧数**（时长 × 帧率），不是色深：P256→P64 每帧只降 38%，帧率减半体积直接减半。
