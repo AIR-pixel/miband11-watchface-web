@@ -2,6 +2,9 @@
 
 GIF / 视频 → 小米手环 11 动态表盘 `.face`，**纯前端，不依赖 `Compiler.exe`，也不生成 `.fprj`**。
 
+输入 GIF 或视频，多张素材各成一页壁纸（短按切换），可叠加时间/日期、可带 AOD 息屏，
+帧图可选无损调色板 PNG 或 4:4:4 的 JPEG，还能按秒只取素材中的一段。
+
 官方链路是「Vela IDE → 手写 Lua/XML → 跑 `Compiler.exe` 打包」。这里把最后一步用纯代码
 重写了一遍：容器布局（文件头 / Title / 元数据槽 / 索引表 / 描述块 / 数据区 / 尾部
 212×520 预览位图）已完整逆向，打包就是字节搬运。
@@ -28,6 +31,10 @@ GIF / 视频 → 小米手环 11 动态表盘 `.face`，**纯前端，不依赖 
 | UI 端到端 | 真浏览器（Edge）选 GIF → 点生成 → 接下载 → 校验 | ✅ |
 | 多壁纸端到端 | 多选 3 张 → 列表 → 点页换预览 → 删一页 → 生成，产物 `lua/face×8 · lua/w2×12` | ✅ |
 | 视频输入端到端 | mp4 + GIF 混排 → 抽 36 + 8 帧 → 生成 → `verify_face.py` + Pillow 逐帧 | ✅ |
+| JPEG 编码器 | 产物 SOF0 三分量采样因子全是 `0x11`；Pillow 独立解码，亮度 PSNR 43.4 dB，色度比同质量 4:2:0 对照高 10 dB 以上 | ✅ |
+| 截取区间 | 3.0s 素材取中间 1.0s：帧数按区间算、选中帧全落在区间内、换起点后首帧字节不同 | ✅ |
+| 视频裁切 | 起点 2s / 时长 1s → 12 帧，首帧与不裁时不同（时间点确实带了偏移） | ✅ |
+| 三件同开 | 界面同时开「JPEG q70 + 裁切 + 两壁纸」→ 20 帧 `.jpg`、Lua `EXT="jpg"`、`verify_face.py` 结构正确 | ✅ |
 | 手机窄屏 | 390 / 375 px 下 `scrollWidth == clientWidth`，无横向溢出 | ✅ |
 | 内置示例 | 示例在播、`换`按钮切三套画（luma 38 → 22）、没有真实素材时「生成」保持禁用 | ✅ |
 | 展示出图 | `shot_showcase.mjs` 一次出 7 张（手环特写 / 整页 / 双壁纸 / 生成完成 / 息屏 / 手机端） | ✅ |
@@ -69,11 +76,14 @@ src/core/video.js                   视频抽帧（seek + drawImage，必须在�
 src/core/image.js                   居中裁剪 + 面积平均缩放
 src/core/quantize.js                中位切分调色板（+ 可选 Floyd–Steinberg）
 src/core/png.js                     调色板 PNG 编码（IHDR/PLTE/IDAT/IEND + CRC32）
+src/core/jpeg.js                    baseline JPEG 编码器（强制 4:4:4，浏览器原生做不到）
 src/core/lua.js                     main.lua 生成（时间/日期、省电双钩子、点击）
 src/core/demo.js                    内置示例壁纸（三套，代码绘制，零素材依赖）
 src/core/facebin.js                 .face 打包 + 解包（唯一需要精度的部分）
 src/core/build.js                   端到端编排（素材统一收敛成「n 帧 RGBA + 播放节奏」）
 tests/                              逐字节回归、结构检查、UI 端到端、本地服务
+tests/jpeg.mjs                      JPEG 编码器验收（表结构 / 码流自检 / PSNR / 4:2:0 对照）
+tests/clip_fmt.mjs                  截取区间 × 编码格式 × 多壁纸（单测 + 端到端）
 tests/make_fixtures.py              重新生成 golden-src 里的测试/展示素材
 tests/shot_showcase.mjs             出一套投稿/社媒用的展示图
 ```
@@ -86,6 +96,8 @@ node tests/build_face.mjs            # 单壁纸全链路，自带描述块、�
 node tests/aod_build.mjs             # AOD 描述块分组顺序 + 体积增量估算
 node tests/multi_wall.mjs            # 三壁纸：页数 / 帧分配 / 哨兵 idx / Lua WALLS
 node tests/roundtrip.mjs             # 往返拆包-重打包（需 face-exp/pc-golden 样本）
+node tests/jpeg.mjs                  # JPEG：码流自检 + Pillow 解码算 PSNR + 4:2:0 对照
+node tests/clip_fmt.mjs              # 裁切 / JPEG / 多壁纸三件一起验
 
 # 1. 结构校验（用原仓库的独立工具）
 python ../miband11-watchface-maker/tools/verify_face.py out/MyFace.face
@@ -95,6 +107,7 @@ node tests/serve.mjs 8765 &
 node tests/ui_smoke.mjs              # 单 GIF 冒烟
 node tests/ui_multi.mjs              # 多壁纸：多选 / 选页 / 删除 / 生成
 node tests/ui_video.mjs              # 视频+GIF 混排，抽帧后逐帧用 Pillow 验
+node tests/ui_fmt_clip.mjs           # 界面上同时开 JPEG + 裁切 + 两壁纸，产物独立核对
 node tests/mobile_shot.mjs           # 390 / 375 px 截图 + 横向溢出检测
 
 # 3. 出展示图（投稿 / 社媒用）
@@ -129,6 +142,51 @@ python tests/make_fixtures.py        # 素材要重画时跑这个（b.gif / w1.
   3 秒和 3 分钟的视频抽 36 帧，用时一样。
 - 选帧规则和 GIF 完全一致（`planUniform`）：等间隔取，帧数触顶就**降帧率、保住时长**。
 
+## 编码格式：PNG 与 JPEG
+
+两种都在，默认 PNG。
+
+- **PNG**：中位切分量化到 256 / 128 / 64 色调色板，再无损压缩。纯色、扁平画面它最省。
+- **JPEG**：自己写的 baseline 4:4:4 编码器（`src/core/jpeg.js`），质量 60–90。
+
+为什么不用 `canvas.toBlob("image/jpeg")`：浏览器原生编码器**恒为 4:2:0**。q 从 0.6 到 0.95
+逐档试过，SOF0 里的采样因子始终是 `2x2 1x1 1x1`，没有一档是 4:4:4 —— 色度被降到一半
+分辨率，彩色边缘会糊成一片脏色，而表盘底图往往就是高饱和渐变。反过来说，关掉子采样
+只多 19% 体积，色度 PSNR 却涨 2.5 dB。
+
+实现是常规写法：FDCT 分离成「先做行、再做列」（每块 1024 次乘加，朴素二维要 4096）、
+标准 Huffman 表（从 libjpeg 的实际输出里解析提取，不手抄规范）、量化表按
+`q < 50 → 5000/q，否则 200 - 2q` 缩放。四个坑都踩过：段长 `Lq` 多报 2 字节会让解析器
+把下一个 marker 当段数据吞掉；头部 marker 里的 `0xFF` **不能**补 `0x00`（只有熵编码段要补）；
+EOI 必须跟在熵数据之后，不能写进头部；YUV 转换要用 `Math.round` 而不是 `|0`
+（负数向零截断，整幅图会带上半个色阶的系统偏差）。
+
+`tests/jpeg.mjs` 负责守着这些：解出产物的 SOF0 断言三分量全是 `0x11`，再用 Pillow 独立
+解码算 PSNR，并与同质量的 4:2:0 对照比色度 —— 差 10 dB 以上才说明 4:4:4 真的生效了。
+
+一帧到底多大取决于画面，没有「哪个一定更小」。本仓库两段素材的实测（212×520 单帧）：
+
+| 素材 | 画面 | PNG P256 | JPEG q80 |
+|---|---|---|---|
+| `w2.gif` | 渐变波纹 + 光晕 | 12.0 KB | **10.8 KB** |
+| `long.gif` | 大片纯色竖条 | **1.3 KB** | 14.7 KB |
+
+纯色/扁平画面 PNG 赢得很轻松（调色板 + 无损，几乎不花代价），渐变和噪点多的画面才轮到
+JPEG 便宜。PC 端在真实照片素材上量到的是 JPEG q80 27.5 KB 对 P64 PNG 41.5 KB。
+所以界面上的体积预算走的是**同一条编码路径**（真编一帧再乘帧数），选格式之前就能看到数字。
+
+## 截取区间（只取素材里的一段）
+
+「截取起点 / 截取时长」两个秒数，语义与 PC 端 `watchface-tool` 一致：时长留空（或 0）=
+取到结尾，起点超过素材长度则退化成整段。
+
+- **帧数按裁切后的长度算**，不是素材全长：3.0s 素材取中间 1.0s，12fps 就是 12 帧，不是 36。
+- **视频**照旧等间隔 seek，只是时间点已含起点偏移（`planUniform` 直接返回绝对时间）。
+- **GIF** 只在区间内的帧池里挑；区间比一帧还窄时，退化成「离起点最近的那一帧」。
+- **多壁纸各自夹到自己的长度**：同一组输入，3.0s 素材取 1.0s，而 0.72s 的素材起点已超长、
+  退化成整段，提示里就显示成 `12 + 8 帧`。
+
+这两个框跟着 `input` 实时重算，边打边能看到帧数和体积变化（不是停在框里就不更新）。
 ## 多壁纸（一个表盘里放几套动画，短按切换）
 
 - 选素材时**一次多选**：第 1 张落在 `lua/face*`，第 2 张起分别是 `lua/w2*`、`lua/w3*`……
@@ -158,9 +216,10 @@ Lua 侧的切换是 `onevent(PRESSED/CLICKED)` + 换图索引，不依赖任何�
 
 ## 还没做
 
-- **JPEG 帧**：浏览器 `canvas.toBlob` 固定 4:2:0 色度子采样，比官方链路的 4:4:4 差
-  （体积只小 19%，色度 PSNR 掉 2.5 dB），所以当前只出 P64/P128/P256 的无损 PNG。
-- **长视频截取**：现在整段抽帧，超过 96 帧就自动降帧率。想要"只取其中 6 秒"得先自己剪。
+- **帧数触顶时只做了「降帧率、保时长」**，没做「快放、保帧率」（PC 端两种取舍都有）。
+- **安卓端 JPEG 恒 4:2:0**：`Bitmap.compress` 没有 4:4:4 的开关，这是平台限制 —— 网页端
+  因为自己写了编码器才绕得过去。
+- **不做 AOD 的真机表现是停在动画最后一帧**（表盘侧行为，跟网页端无关，记在这里免得重复踩）。
 
 ## 踩过的坑（给后来改代码的人）
 

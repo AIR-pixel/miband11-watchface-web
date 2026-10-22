@@ -1,12 +1,10 @@
 import { decodeGif } from './src/core/gif.js';
 import { coverRGBA } from './src/core/image.js';
-import { quantize } from './src/core/quantize.js';
-import { encodePNG } from './src/core/png.js';
 import { PREVIEW_W, PREVIEW_H } from './src/core/facebin.js';
 import { planAod, estimateAodBytes, aodRecCount, parseColor } from './src/core/aod.js';
-import { planFrames, planUniform } from './src/core/build.js';
+import { planFrames, planUniform, clipRange, encodeFrame, JPG_QUALITY } from './src/core/build.js';
 import { probeVideo, extractFrames, firstFrame, releaseVideo } from './src/core/video.js';
-import { DEMOS, DEMO_COUNT, DEMO_PERIOD_MS, renderDemoFrames } from './src/core/demo.js';
+import { DEMOS, DEMO_PERIOD_MS, renderDemoFrames } from './src/core/demo.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('preview');
@@ -17,6 +15,8 @@ const state = {
   walls: [],          // [{ name, kind:'gif'|'video', bytes?, frames?, poster?, video?, plan }]
   wallIdx: 0,
   level: 'balanced',
+  fmt: 'png',         // 'png' | 'jpg'
+  jpgQuality: JPG_QUALITY,
   view: 'main',
   estimate: null,
   building: false,
@@ -24,6 +24,13 @@ const state = {
 
 const COLORS = { high: 256, balanced: 256, small: 128, tiny: 64 };
 const FIXED_BYTES = 440972 + 12 + 400; // 预览位图 + 容器骨架（估算用，实际以构建为准）
+
+/** 当前「截取区间」两个输入框的值（秒）。空/非法按 0 处理。 */
+function clipInputs() {
+  const start = Number($('clipStart').value) || 0;
+  const dur = Number($('clipDur').value) || 0;
+  return { start, dur };
+}
 
 const escapeHtml = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -133,17 +140,26 @@ function renderWallList() {
     : '等待素材';
 }
 
+/** 素材总时长（ms）。裁切区间的上限按它夹，多壁纸各自夹到自己的长度。 */
+function wallDurationMs(w) {
+  if (w.kind === 'video') return w.video.durationMs;
+  if (w.kind === 'gif') return w.gif.frames.reduce((a, f) => a + f.delayMs, 0);
+  return (w.plan && w.plan.durationMs) || 0;
+}
+
 function recomputePlans() {
   const fps = Number($('fps').value);
   const maxFrames = Number($('maxFrames').value);
+  const { start, dur } = clipInputs();
   for (const w of state.walls) {
     if (w.kind === 'demo') continue;      // 示例帧数固定，不跟帧率/上限走
+    const clip = clipRange(wallDurationMs(w), start, dur);
     if (w.kind === 'video') {
-      w.plan = planUniform(w.video.durationMs, fps, maxFrames);
+      w.plan = planUniform(w.video.durationMs, fps, maxFrames, clip);
     } else {
-      const p = planFrames(w.gif.frames.map((f) => f.delayMs), fps, maxFrames);
+      const p = planFrames(w.gif.frames.map((f) => f.delayMs), fps, maxFrames, clip);
       w.plan = { count: p.indices.length, periodMs: p.periodMs, indices: p.indices,
-        durationMs: p.durationMs };
+        durationMs: p.durationMs, clipStartMs: p.clipStartMs };
     }
   }
   renderWallList();
@@ -155,11 +171,20 @@ function recomputePlans() {
   const total = state.walls.reduce((a, w) => a + w.plan.count, 0);
   const per = state.walls.filter((w) => w.kind !== 'demo').map((w) => w.plan.count).join(' + ');
   const vids = state.walls.filter((w) => w.kind === 'video').length;
-  const note = vids ? `视频在点「生成」时按 ${total} 个时间点抽帧。` : '';
-  const warn = total > 320 ? ' 帧数偏多，生成会慢，也吃内存。' : '';
-  setHint(state.walls.length > 1
-    ? `每张壁纸 ${per} 帧，共 ${total} 帧 @ ${(1000 / state.walls[0].plan.periodMs).toFixed(1)}fps。多壁纸默认开启短按切换。${note}${warn}`
-    : `保留 ${total} 帧 @ ${(1000 / state.walls[0].plan.periodMs).toFixed(1)}fps，原素材 ${(state.walls[0].plan.durationMs / 1000).toFixed(2)}s。${note}${warn}`);
+  const fpsTxt = (1000 / state.walls[0].plan.periodMs).toFixed(1);
+  const parts = [];
+  parts.push(state.walls.length > 1
+    ? `每张壁纸 ${per} 帧，共 ${total} 帧 @ ${fpsTxt}fps。多壁纸默认开启短按切换。`
+    : `保留 ${total} 帧 @ ${fpsTxt}fps，原素材 ${(wallDurationMs(state.walls[0]) / 1000).toFixed(2)}s。`);
+  // 裁切生效时把区间也写进提示，否则「原素材 8s / 只留 3s」看着像 bug
+  const first = state.walls.find((w) => w.kind !== 'demo');
+  if (first && first.plan.clipStartMs > 0) {
+    const s = (first.plan.clipStartMs / 1000).toFixed(1);
+    parts.push(`截取 ${s}s 起 ${(first.plan.durationMs / 1000).toFixed(1)}s（原素材 ${(wallDurationMs(first) / 1000).toFixed(1)}s）。`);
+  }
+  if (vids) parts.push(`视频在点「生成」时按 ${total} 个时间点抽帧。`);
+  if (total > 320) parts.push('帧数偏多，生成会慢，也吃内存。');
+  setHint(parts.join(' '));
 }
 
 /* ───────────── 预览 ───────────── */
@@ -297,20 +322,19 @@ function scheduleEstimate() {
 async function estimate() {
   if (!state.walls.length) return;
   const colors = COLORS[state.level] || 256;
-  // 用第一张壁纸的首帧真编一遍来估每帧字节（PNG 体积取决于画面复杂度）
+  // 用第一张壁纸的首帧真编一遍来估每帧字节（体积取决于画面复杂度与编码格式）
   const first = state.walls[0];
   const sample = first.kind === 'video' ? first.poster : first.frames[0];
   if (!sample) return;
-  const { indices, palette } = quantize(sample, colors, false);
-  const png = await encodePNG(indices, palette, PREVIEW_W, PREVIEW_H);
+  const enc = await encodeFrame(sample, colors, state.fmt, state.jpgQuality);
   const frames = state.walls.reduce((a, w) => a + (w.plan ? w.plan.count : 0), 0);
   const aod = aodCfg();
   const aodBytes = aod.enabled
     ? estimateAodBytes(aod) + aodRecCount(planAod(aod)) * 16 // 描述块每条 16 B
     : 0;
-  const imageBytes = png.length * frames;
+  const imageBytes = enc.length * frames;
   const total = FIXED_BYTES + imageBytes + aodBytes;
-  state.estimate = { perFrame: png.length, frames, total, aodBytes };
+  state.estimate = { perFrame: enc.length, frames, total, aodBytes };
 
   const kb = (n) => (n / 1024).toFixed(0);
   const pct = (n) => Math.min(100, (n / total) * 100);
@@ -374,11 +398,13 @@ async function build() {
   const sources = [];
   const transfer = [];
   const totalFrames = real.reduce((a, w) => a + w.plan.count, 0);
+  const clipIn = clipInputs();
   let extracted = 0;
   try {
     for (const w of real) {
       if (w.kind === 'gif') {
-        sources.push({ kind: 'gif', bytes: w.bytes });
+        // 裁切信息随 source 一起交给 Worker —— GIF 在 Worker 里解，规划也在那边做
+        sources.push({ kind: 'gif', bytes: w.bytes, clip: clipRange(wallDurationMs(w), clipIn.start, clipIn.dur) });
         continue;
       }
       const frames = await extractFrames(w.video, w.plan.times, PREVIEW_W, PREVIEW_H, (d, t) => {
@@ -403,6 +429,8 @@ async function build() {
       fps: Number($('fps').value),
       maxFrames: Number($('maxFrames').value),
       level: state.level,
+      fmt: state.fmt,
+      jpgQuality: state.jpgQuality,
       showTime: $('showTime').checked,
       showDate: $('showDate').checked,
       timeSize: Number($('timeSize').value),
@@ -489,6 +517,32 @@ $('level').addEventListener('click', (e) => {
   [...$('level').children].forEach((b) => b.classList.toggle('on', b === btn));
   state.level = btn.dataset.v;
   scheduleEstimate();
+});
+
+$('fmt').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn || btn.disabled) return;
+  [...$('fmt').children].forEach((b) => b.classList.toggle('on', b === btn));
+  const isJpg = btn.dataset.v === 'jpg';
+  state.fmt = isJpg ? 'jpg' : 'png';
+  $('jpgRow').hidden = !isJpg;
+  // JPEG 是全彩有损编码，调色板档位对它没意义 —— 置灰而不是藏起来，
+  // 否则切回 PNG 时用户找不到原来的档位（藏起来会让布局跳一下）
+  $('level').querySelectorAll('button').forEach((b) => { b.disabled = isJpg; });
+  $('levelTip').textContent = isJpg ? 'JPEG 全彩，不用调色板' : '';
+  scheduleEstimate();
+});
+
+$('jpgQuality').addEventListener('change', () => {
+  state.jpgQuality = Number($('jpgQuality').value) || JPG_QUALITY;
+  scheduleEstimate();
+});
+
+// 截取区间是自由输入的数字框：跟着 input 实时重算，边打边看到帧数变化。
+// 只挂 change 的话，用户敲完不停在框里就看不到更新（浏览器只在失焦时派发 change）。
+['clipStart', 'clipDur'].forEach((id) => {
+  $(id).addEventListener('input', () => { recomputePlans(); scheduleEstimate(); });
+  $(id).addEventListener('change', () => { recomputePlans(); scheduleEstimate(); });
 });
 
 $('fps').addEventListener('change', () => { recomputePlans(); scheduleEstimate(); });

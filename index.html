@@ -50,12 +50,31 @@
 
   <section class="panel">
     <div class="row">
-      <label>画质档位</label>
+      <label>画质档位 <span class="tip" id="levelTip"></span></label>
       <div class="seg" id="level">
         <button data-v="tiny">P64 · 极限</button>
         <button data-v="small">P128 · 小体积</button>
         <button data-v="balanced" class="on">P256 · 均衡</button>
       </div>
+    </div>
+
+    <div class="row">
+      <label>编码格式</label>
+      <div class="seg" id="fmt">
+        <button data-v="png" class="on">PNG · 无损</button>
+        <button data-v="jpg">JPEG · 有损</button>
+      </div>
+    </div>
+
+    <div class="row" id="jpgRow" hidden>
+      <label>JPEG 质量 <span class="tip">4:4:4 不压色度</span></label>
+      <select id="jpgQuality">
+        <option value="90">90 · 最高</option>
+        <option value="85">85</option>
+        <option value="80" selected>80 · 默认</option>
+        <option value="70">70</option>
+        <option value="60">60 · 最小</option>
+      </select>
     </div>
 
     <div class="row two">
@@ -72,6 +91,17 @@
           <option>24</option><option>48</option><option selected>96</option>
           <option>144</option><option>240</option>
         </select>
+      </div>
+    </div>
+
+    <div class="row two">
+      <div>
+        <label>截取起点 <span class="tip">秒</span></label>
+        <input id="clipStart" type="number" min="0" step="0.1" value="0" inputmode="decimal" />
+      </div>
+      <div>
+        <label>截取时长 <span class="tip">秒 · 留空取全片</span></label>
+        <input id="clipDur" type="number" min="0" step="0.1" placeholder="全片" inputmode="decimal" />
       </div>
     </div>
 

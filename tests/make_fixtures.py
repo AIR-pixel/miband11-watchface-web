@@ -10,6 +10,9 @@
          青绿圆环 + 绕行光点。帧数保持 13，`8 + 12 帧` 这类断言才不用改。
 - w1.gif / w2.gif 12 帧 / 240×560 —— 只给投稿截图用（极光 / 波纹）。a/b/c.gif 是刻意
          画得简单的，拿来当展示图不好看。
+- long.gif 30 帧 / 100ms 一帧 = 3.0s / 240×560 —— 专给「截取区间」测试用。之前三张素材
+         都不到 1.1s，区间根本没地方裁。画面上有一条位置 = 帧号的亮条，所以「取的是不是
+         区间里的帧」可以直接比字节判断，不用另做对照图。
 
 画法要点：发光用 `ImageChops.screen`（加色）而不是 alpha 合成 —— alpha 盖在黑底上会把
 整幅压暗，出来一片灰绿；screen 才是「亮的地方更亮」。
@@ -114,11 +117,23 @@ def ripples(i, n):
     return im
 
 
-def save(name, frames):
+def save(name, frames, period=PERIOD_MS):
     path = os.path.join(HERE, name)
     frames[0].save(path, save_all=True, append_images=frames[1:],
-                   duration=PERIOD_MS, loop=0, optimize=True)
+                   duration=period, loop=0, optimize=True)
     print('->', name, len(frames), '帧', os.path.getsize(path), 'B')
+
+
+# ── long.gif：给裁切测试用的 3 秒素材 ──────────────────────────────
+def long_frame(i, n):
+    im = Image.new('RGB', (W, H), (10, 12, 18))
+    d = ImageDraw.Draw(im)
+    for y in range(0, H, 20):
+        d.rectangle([0, y, W, y + 10], fill=(int(10 + y * 0.1), int(12 + y * 0.08), int(18 + y * 0.12)))
+    # 竖向亮条的横坐标 = 帧序号：选到哪一帧，从字节上就能看出来
+    x = int((W - 40) * i / max(1, n - 1))
+    d.rectangle([x, 0, x + 40, H], fill=(90, 210, 190))
+    return im.quantize(colors=32, method=Image.MEDIANCUT)
 
 
 if __name__ == '__main__':
@@ -126,3 +141,4 @@ if __name__ == '__main__':
     for name, fn in [('w1.gif', aurora), ('w2.gif', ripples)]:
         save(name, [fn(i, 12).resize((W, H), Image.LANCZOS)
                     .quantize(colors=64, method=Image.MEDIANCUT) for i in range(12)])
+    save('long.gif', [long_frame(i, 30) for i in range(30)], period=100)

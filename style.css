@@ -259,6 +259,9 @@ select:focus, input:focus { border-color: var(--accent); }
   white-space: nowrap;
 }
 .seg button.on { background: #2a3a35; color: #bfe3d9; box-shadow: inset 0 0 0 1px #3c5a52; }
+/* 置灰要一眼看出「这组现在不管用」：压暗 + 去掉选中态的高亮底 */
+.seg button:disabled { opacity: .38; cursor: not-allowed; }
+.seg button.on:disabled { background: transparent; box-shadow: none; color: var(--ink2); }
 
 .switch-row { flex-direction: row; gap: 20px; flex-wrap: wrap; align-items: center; }
 .sw { display: flex; align-items: center; gap: 7px; }
@@ -352,3 +355,8 @@ input[type="range"] { padding: 4px 0; background: transparent; border: 0; accent
   .band { transform: scale(0.82); transform-origin: top center; margin-bottom: -108px; }
   .how { padding: 16px 16px 0; margin: 14px auto 40px; }
 }
+
+/* `hidden` 必须能盖住组件自己的 display —— 浏览器默认的 `[hidden]{display:none}`
+   只是个 UA 规则，`.row{display:flex}` 这种同特异性的类规则会把它顶掉。
+   代价是「JPEG 质量」那行在 PNG 模式下也一直显示着，直到拿截图核对才发现。 */
+[hidden] { display: none !important; }

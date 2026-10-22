@@ -78,6 +78,24 @@ await page.waitForTimeout(400);
 await page.screenshot({ path: join(OUT, 'video-done.png') });
 
 const doneHint = await page.textContent('#hint');
+
+/* 3b. 视频裁切：起点 2s、时长 1s → 12 帧，且抽到的首帧必须与不裁时不同。
+       只验「帧数对了」不够 —— 帧数对但时间点没加偏移（还是从 0 抽）也一样是 12 帧。 */
+await page.fill('#clipStart', '2');
+await page.fill('#clipDur', '1');
+await page.waitForTimeout(600);
+const clipHint = await page.textContent('#hint');
+// 多壁纸时提示是「每张壁纸 12 + 8 帧」，单壁纸是「保留 12 帧」—— 两种都认
+if (!/12 \+ 8 帧|保留 12 帧/.test(clipHint)) fail.push('视频裁到 1s 应为 12 帧：' + clipHint);
+const [download2] = await Promise.all([
+  page.waitForEvent('download', { timeout: 180000 }),
+  page.click('#build'),
+]);
+const clipFacePath = join(OUT, 'clip_' + download2.suggestedFilename());
+await download2.saveAs(clipFacePath);
+const clipDoneHint = await page.textContent('#hint');
+await page.screenshot({ path: join(OUT, 'video-clip.png') });
+
 await browser.close();
 
 /* 4. 抽出来的帧必须真的是不同画面。
@@ -96,8 +114,17 @@ const perFrameAvg = vFrames.length
   ? +(vFrames.reduce((a, f) => a + f.data.length, 0) / vFrames.length).toFixed(0)
   : 0;
 
+// 裁切后的那一次：12 帧，首帧必须与不裁的首帧不同（证明时间点真的加了偏移）
+const cFrames = unpackFace(new Uint8Array(readFileSync(clipFacePath)))
+  .files.filter((f) => /^lua\/face_\d+\.png$/.test(f.name));
+if (cFrames.length !== 12) fail.push(`视频裁到 1s 应抽出 12 帧，实为 ${cFrames.length}`);
+if (cFrames.length && vFrames.length && sameBytes(cFrames[0].data, vFrames[0].data)) {
+  fail.push('裁切后的首帧与不裁的首帧字节相同 —— 时间点没加起点偏移');
+}
+
 console.log(JSON.stringify({ srcInfo, rows, previewLuma: +lum.toFixed(1), doneHint,
-  videoFrames: vFrames.length, dupPairs: dups.length, avgFrameBytes: perFrameAvg, fail }, null, 2));
+  videoFrames: vFrames.length, dupPairs: dups.length, avgFrameBytes: perFrameAvg,
+  clip: { hint: clipHint, done: clipDoneHint, frames: cFrames.length }, fail }, null, 2));
 
 /* 5. 结构 + 逐帧可解码 */
 if (!fail.length) {
