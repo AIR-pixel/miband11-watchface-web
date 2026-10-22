@@ -269,6 +269,12 @@ function drawAod() {
       for (let i = 0; i < txt.length; i++) {
         ctx.fillText(txt[i], w.x + w.digitW * (i + 0.5), w.y + w.digitH / 2);
       }
+    } else if (w.name === 'aod_dcolon') {
+      // 月日之间画句点（一个点压在基线上），别再画成冒号 —— 日期会跟时间行撞脸
+      const rad = Math.max(1, Math.round(w.w * 0.28));
+      ctx.beginPath();
+      ctx.arc(w.x + w.w / 2, w.y + w.h * 0.83, rad, 0, Math.PI * 2);
+      ctx.fill();
     } else if (w.name.includes('colon')) {
       const rad = Math.max(1, Math.round(w.w * 0.28));
       for (const fy of [0.34, 0.68]) {

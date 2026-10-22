@@ -149,25 +149,35 @@ function canvasMask(ch, w, h) {
   return mask;
 }
 
+/** 往遮罩里盖一个抗锯齿圆点（用距离场做边缘，比字形可靠） */
+function blob(mask, w, h, cx, cy, r) {
+  for (let y = cy - r; y <= cy + r; y++) {
+    for (let x = cx - r; x <= cx + r; x++) {
+      if (x < 0 || y < 0 || x >= w || y >= h) continue;
+      const d = Math.hypot(x - cx, y - cy);
+      const a = Math.max(0, Math.min(1, r + 0.5 - d));
+      if (a <= 0) continue;
+      const o = y * w + x;
+      mask[o] = Math.max(mask[o], Math.round(a * 255));
+    }
+  }
+  return mask;
+}
+
 /** 冒号：用两个圆点画，比字形可靠（12 px 宽的字形常常糊成一团） */
 function colonMask(w, h) {
   const mask = new Uint8Array(w * h);
   const r = Math.max(1, Math.round(w * 0.28));
   const cx = Math.floor(w / 2);
-  const ys = [Math.round(h * 0.34), Math.round(h * 0.68)];
-  for (const cy of ys) {
-    for (let y = cy - r; y <= cy + r; y++) {
-      for (let x = cx - r; x <= cx + r; x++) {
-        if (x < 0 || y < 0 || x >= w || y >= h) continue;
-        const d = Math.hypot(x - cx, y - cy);
-        const a = Math.max(0, Math.min(1, r + 0.5 - d));
-        if (a <= 0) continue;
-        const o = y * w + x;
-        mask[o] = Math.max(mask[o], Math.round(a * 255));
-      }
-    }
-  }
+  for (const cy of [Math.round(h * 0.34), Math.round(h * 0.68)]) blob(mask, w, h, cx, cy, r);
   return mask;
+}
+
+/** 日期分隔句点：一个点，落在数字基线上（对应 PC / 安卓字库里的 DOT 字模） */
+function dotMask(w, h) {
+  const mask = new Uint8Array(w * h);
+  const r = Math.max(1, Math.round(w * 0.28));
+  return blob(mask, w, h, Math.floor(w / 2), Math.round(h * 0.83), r);
 }
 
 /**
@@ -190,7 +200,10 @@ export function makeAodImages(ws, opts = {}) {
     let img;
     if (name === 'aod_bg') {
       img = { w: size.w, h: size.h, bgra: solidBgra(size.w, size.h, 0, 0, 0) };
-    } else if (name === 'aod_colon' || name === 'aod_dcolon') {
+    } else if (name === 'aod_dcolon') {
+      // 日期分隔：一个句点（文件名沿用 dcolon，和 PC / 安卓一致）
+      img = { w: size.w, h: size.h, bgra: maskToBgra(dotMask(size.w, size.h), r, g, b) };
+    } else if (name === 'aod_colon') {
       img = { w: size.w, h: size.h, bgra: maskToBgra(colonMask(size.w, size.h), r, g, b) };
     } else {
       const digit = Number(name.slice(-2));

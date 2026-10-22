@@ -48,8 +48,8 @@ await page.waitForTimeout(300);
 // 息屏默认未启用，先打开才有内容
 const aodOn = await page.isChecked('#aodOn');
 if (!aodOn) { await page.check('#aodOn'); await page.waitForTimeout(400); }
-// 展示用：青色数字。**不开月日** —— 月日分隔符现在复用冒号图（10:22），截图里会被看成
-// 第二行时间，展示图上先不露这个短板。
+// 展示用：时间 + 日期，青色数字。月日分隔是句点（10.22），不会再跟时间行撞脸
+await page.selectOption('#aodMode', 'both');
 await page.fill('#aodColor', '#7FE7D8');
 await page.dispatchEvent('#aodColor', 'input');
 await page.click('#viewTabs button[data-v="aod"]');

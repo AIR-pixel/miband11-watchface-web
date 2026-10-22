@@ -7,6 +7,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { buildFaceFromGif } from '../src/core/build.js';
+import { planAod, makeAodImages } from '../src/core/aod.js';
 import { unfoldAod } from './_aod_check.mjs';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
@@ -68,6 +69,47 @@ if (est > 0 && Math.abs(delta - est) / est > 0.35) {
   fail.push(`实际增量 ${delta} 与估算 ${est} 差超过 35%`);
 }
 
+/* ---- 自检：时间分隔是冒号（两簇墨），日期分隔是句点（一簇、且落在下半部） ----
+   这条是防止有人把 aod_dcolon 又画回冒号 —— 日期显示成 10:22 跟时间行撞脸，
+   光看容器字节完全正常，只能从图上看出来。 */
+const sep = makeAodImages(planAod({ enabled: true, timeMode: 'both', color: '#FFFFFF' }),
+  { renderMask: fakeMask });   // Node 里没有 OffscreenCanvas，数字用假遮罩（这里只看分隔符）
+/** 每行的墨量（alpha 之和），用来判断"几簇" */
+function rowInk(img) {
+  const out = [];
+  for (let y = 0; y < img.h; y++) {
+    let s = 0;
+    for (let x = 0; x < img.w; x++) s += img.bgra[(y * img.w + x) * 4 + 3];
+    out.push(s);
+  }
+  return out;
+}
+/** 连续有墨的行分成几段 */
+function clusters(ink) {
+  let n = 0, prev = false;
+  for (const v of ink) {
+    const on = v > 12 * 255 * 0.02;
+    if (on && !prev) n++;
+    prev = on;
+  }
+  return n;
+}
+const colonImg = sep.get('aod_colon');
+const dotImg = sep.get('aod_dcolon');
+let sepReport = null;
+if (!colonImg || !dotImg) {
+  fail.push('缺 aod_colon / aod_dcolon 素材');
+} else {
+  const cInk = rowInk(colonImg), dInk = rowInk(dotImg);
+  const cN = clusters(cInk), dN = clusters(dInk);
+  const inkRows = dInk.map((v, y) => (v > 0 ? y : -1)).filter((y) => y >= 0);
+  const dotMid = inkRows.length ? (inkRows[0] + inkRows[inkRows.length - 1]) / 2 / dotImg.h : 0;
+  if (cN !== 2) fail.push(`时间冒号应为 2 簇墨，实际 ${cN} 簇`);
+  if (dN !== 1) fail.push(`日期分隔应为 1 簇墨（句点），实际 ${dN} 簇 —— 是不是又画回冒号了？`);
+  if (dotMid < 0.5) fail.push(`日期句点应落在下半部（基线），实际中心在 ${(dotMid * 100).toFixed(0)}% 高度`);
+  sepReport = { colonClusters: cN, dotClusters: dN, dotCenterPct: +(dotMid * 100).toFixed(1) };
+}
+
 console.log(JSON.stringify({
   mode,
   src: gifPath,
@@ -78,6 +120,7 @@ console.log(JSON.stringify({
   estimatedAodBytes: est,
   recCount: withAod.stats.recs,
   recTags: tags,
+  separators: sepReport,
   out: outPath,
   fail,
 }, null, 2));
