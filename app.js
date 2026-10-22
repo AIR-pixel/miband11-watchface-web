@@ -6,6 +6,7 @@ import { PREVIEW_W, PREVIEW_H } from './src/core/facebin.js';
 import { planAod, estimateAodBytes, aodRecCount, parseColor } from './src/core/aod.js';
 import { planFrames, planUniform } from './src/core/build.js';
 import { probeVideo, extractFrames, firstFrame, releaseVideo } from './src/core/video.js';
+import { DEMOS, DEMO_COUNT, DEMO_PERIOD_MS, renderDemoFrames } from './src/core/demo.js';
 
 const $ = (id) => document.getElementById(id);
 const canvas = $('preview');
@@ -26,6 +27,49 @@ const FIXED_BYTES = 440972 + 12 + 400; // 预览位图 + 容器骨架（估算�
 
 const escapeHtml = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+/* ───────────── 内置示例（首屏就有动效，不依赖用户素材） ───────────── */
+
+let demoIdx = 0;
+
+function makeDemoWall(id) {
+  const frames = renderDemoFrames(id, PREVIEW_W, PREVIEW_H);
+  const label = (DEMOS.find((d) => d.id === id) || DEMOS[0]).name;
+  return {
+    name: label,
+    kind: 'demo',
+    demoId: id,
+    frames,
+    plan: {
+      count: frames.length,
+      periodMs: DEMO_PERIOD_MS,
+      durationMs: frames.length * DEMO_PERIOD_MS,
+      indices: frames.map((_, i) => i),
+    },
+  };
+}
+
+/** 只在没有任何真实素材时才挂示例，且只有一个 */
+function ensureDemo() {
+  if (state.walls.some((w) => w.kind !== 'demo')) return;
+  const id = DEMOS[demoIdx % DEMOS.length].id;
+  state.walls = [makeDemoWall(id)];
+  state.wallIdx = 0;
+}
+
+function nextDemo() {
+  demoIdx += 1;
+  state.walls = state.walls.filter((w) => w.kind !== 'demo');
+  state.walls.unshift(makeDemoWall(DEMOS[demoIdx % DEMOS.length].id));
+  state.wallIdx = 0;
+  state.view = 'main';
+  [...$('viewTabs').children].forEach((b) => b.classList.toggle('on', b.dataset.v === 'main'));
+  recomputePlans();
+  scheduleEstimate();
+  syncBuildBtn();
+}
+
+const hasRealWall = () => state.walls.some((w) => w.kind !== 'demo');
+
 /* ───────────── 素材载入 ───────────── */
 
 const isGif = (f) => /gif$/i.test(f.name) || f.type === 'image/gif';
@@ -34,6 +78,9 @@ const isVideo = (f) => /^(video)\//.test(f.type) || /\.(mp4|webm|mov|m4v)$/i.tes
 async function loadFiles(files) {
   const list = [...files].filter(Boolean);
   if (!list.length) return;
+  // 真实素材进来，示例自动让位（不然会混进生成结果）
+  const hadDemo = state.walls.some((w) => w.kind === 'demo');
+  if (hadDemo) { state.walls = []; state.wallIdx = 0; }
   for (const file of list) {
     try {
       if (isGif(file)) {
@@ -60,10 +107,11 @@ async function loadFiles(files) {
     }
   }
   if (state.wallIdx >= state.walls.length) state.wallIdx = 0;
+  ensureDemo();               // 一个都没读进来（或全失败）时把示例放回去
   recomputePlans();
   startPreview();
   scheduleEstimate();
-  $('build').disabled = !state.walls.length;
+  syncBuildBtn();
 }
 
 function renderWallList() {
@@ -72,13 +120,16 @@ function renderWallList() {
   box.innerHTML = state.walls.map((w, i) => `
     <div class="wall${i === state.wallIdx ? ' on' : ''}" data-i="${i}">
       <span class="idx">${i + 1}</span>
-      <span class="nm">${escapeHtml(w.name)}${w.kind === 'video' ? ' <i class="tag">视频</i>' : ''}</span>
+      <span class="nm">${escapeHtml(w.name)}${w.kind === 'video' ? ' <i class="tag">视频</i>' : ''}${w.kind === 'demo' ? ' <i class="tag demo">示例</i>' : ''}</span>
       <span class="cnt">${w.plan ? w.plan.count : 0} 帧</span>
-      <span class="rm" data-rm="${i}">✕</span>
+      ${w.kind === 'demo' ? '<span class="swp" data-swap="1" title="换一个示例">换</span>' : ''}
+      ${w.kind === 'demo' ? '' : `<span class="rm" data-rm="${i}">✕</span>`}
     </div>`).join('');
   const total = state.walls.reduce((a, w) => a + (w.plan ? w.plan.count : 0), 0);
   $('srcInfo').textContent = state.walls.length
-    ? `${state.walls.length} 张壁纸 · 共 ${total} 帧`
+    ? (hasRealWall()
+      ? `${state.walls.length} 张壁纸 · 共 ${total} 帧`
+      : `示例预览 · 共 ${total} 帧`)
     : '等待素材';
 }
 
@@ -86,6 +137,7 @@ function recomputePlans() {
   const fps = Number($('fps').value);
   const maxFrames = Number($('maxFrames').value);
   for (const w of state.walls) {
+    if (w.kind === 'demo') continue;      // 示例帧数固定，不跟帧率/上限走
     if (w.kind === 'video') {
       w.plan = planUniform(w.video.durationMs, fps, maxFrames);
     } else {
@@ -96,8 +148,12 @@ function recomputePlans() {
   }
   renderWallList();
   if (!state.walls.length) return;
+  if (!hasRealWall()) {
+    setHint('这是内置示例，用来演示表盘在手表上的样子。拖入自己的 GIF 或视频就能替换掉它。');
+    return;
+  }
   const total = state.walls.reduce((a, w) => a + w.plan.count, 0);
-  const per = state.walls.map((w) => w.plan.count).join(' + ');
+  const per = state.walls.filter((w) => w.kind !== 'demo').map((w) => w.plan.count).join(' + ');
   const vids = state.walls.filter((w) => w.kind === 'video').length;
   const note = vids ? `视频在点「生成」时按 ${total} 个时间点抽帧。` : '';
   const warn = total > 320 ? ' 帧数偏多，生成会慢，也吃内存。' : '';
@@ -145,7 +201,11 @@ function drawFrame(rgba, note) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
     ctx.fillStyle = '#fff';
+    // 柔和的暗色投影：表盘背景可能是亮的，纯白字没有这层会糊在画面里
+    ctx.shadowColor = 'rgba(0,0,0,0.55)';
+    ctx.shadowBlur = 8;
     ctx.fillText(txt, PREVIEW_W / 2, y);
+    ctx.shadowBlur = 0;
   }
   if ($('showDate').checked) {
     const now = new Date();
@@ -153,7 +213,10 @@ function drawFrame(rgba, note) {
     ctx.font = '400 16px system-ui, -apple-system, "PingFang SC"';
     ctx.textAlign = 'center';
     ctx.fillStyle = '#eee';
+    ctx.shadowColor = 'rgba(0,0,0,0.55)';
+    ctx.shadowBlur = 6;
     ctx.fillText(txt, PREVIEW_W / 2, 86 + 16);
+    ctx.shadowBlur = 0;
   }
   if (note) {
     ctx.font = '400 11px system-ui, sans-serif';
@@ -245,6 +308,8 @@ async function estimate() {
 
   const kb = (n) => (n / 1024).toFixed(0);
   const pct = (n) => Math.min(100, (n / total) * 100);
+  // 只有示例时，这个数字是「假如把你看到的这段做成表盘会有多大」，别让人以为已经能生成
+  $('budgetLabel').textContent = hasRealWall() ? '体积预算' : '体积预算（按当前示例估算）';
   $('budgetTotal').textContent = `≈ ${kb(total)} KB`;
   $('barFixed').style.width = `${pct(FIXED_BYTES)}%`;
   $('barFrames').style.width = `${pct(imageBytes)}%`;
@@ -289,7 +354,12 @@ function getWorker() {
 }
 
 async function build() {
-  if (!state.walls.length || state.building) return;
+  if (state.building) return;
+  const real = state.walls.filter((w) => w.kind !== 'demo');
+  if (!real.length) {
+    setHint('示例只是演示，不能生成 —— 先拖入自己的 GIF 或视频。');
+    return;
+  }
   setBuilding(true);
   $('bar').style.width = '2%';
 
@@ -297,10 +367,10 @@ async function build() {
   // 每点一次生成都重新抽 —— 帧 buffer 被 transfer 走之后就 detach 了，不能留着重用。
   const sources = [];
   const transfer = [];
-  const totalFrames = state.walls.reduce((a, w) => a + w.plan.count, 0);
+  const totalFrames = real.reduce((a, w) => a + w.plan.count, 0);
   let extracted = 0;
   try {
-    for (const w of state.walls) {
+    for (const w of real) {
       if (w.kind === 'gif') {
         sources.push({ kind: 'gif', bytes: w.bytes });
         continue;
@@ -359,8 +429,17 @@ function finishBuild({ face, faceName, stats }) {
 function setBuilding(v) {
   state.building = v;
   const b = $('build');
-  b.disabled = v || !state.walls.length;
-  b.textContent = v ? '生成中…' : '生成 .face';
+  if (v) { b.disabled = true; b.textContent = '生成中…'; return; }
+  syncBuildBtn();
+}
+
+/** 生成按钮的状态：只有示例时禁用，并直说「先拖入素材」 */
+function syncBuildBtn() {
+  const b = $('build');
+  if (!b) return;
+  const real = hasRealWall();
+  b.disabled = state.building || !real;
+  if (!state.building) b.textContent = real ? '生成 .face' : '先拖入素材';
 }
 
 function setHint(t) { $('hint').textContent = t; }
@@ -376,6 +455,7 @@ $('file').addEventListener('change', (e) => { loadFiles(e.target.files); e.targe
 $('drop').addEventListener('drop', (e) => loadFiles(e.dataTransfer.files));
 
 $('wallList').addEventListener('click', (e) => {
+  if (e.target.closest('[data-swap]')) { nextDemo(); return; }
   const rm = e.target.closest('[data-rm]');
   if (rm) {
     const i = Number(rm.dataset.rm);
@@ -383,9 +463,10 @@ $('wallList').addEventListener('click', (e) => {
     if (gone && gone.kind === 'video') releaseVideo(gone.video);
     if (i < state.wallIdx) state.wallIdx -= 1;   // 删掉前面的行，选中项跟着前移，别跳一格
     if (state.wallIdx >= state.walls.length) state.wallIdx = Math.max(0, state.walls.length - 1);
+    ensureDemo();              // 删光了就把示例放回来，别留个空预览
     recomputePlans();          // 重算帧数与提示，否则删页后底部还写着旧帧数
     scheduleEstimate();
-    $('build').disabled = !state.walls.length;
+    syncBuildBtn();
     return;
   }
   const row = e.target.closest('.wall');
@@ -438,6 +519,12 @@ $('viewTabs').addEventListener('click', (e) => {
 $('aodBody').hidden = true;
 $('wallList').hidden = true;
 
-// 空态
+// 首屏：先铺一层黑，再挂上内置示例 —— 一进来就看得到表盘在动，
+// 不用先找素材才明白这工具干什么
 ctx.fillStyle = '#000';
 ctx.fillRect(0, 0, PREVIEW_W, PREVIEW_H);
+ensureDemo();
+recomputePlans();
+startPreview();
+scheduleEstimate();
+syncBuildBtn();

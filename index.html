@@ -21,9 +21,15 @@
 
 <main>
   <section class="stage">
-    <div class="device">
-      <canvas id="preview" width="212" height="520"></canvas>
-      <div class="glow"></div>
+    <div class="band">
+      <span class="strap up"></span>
+      <div class="device">
+        <canvas id="preview" width="212" height="520"></canvas>
+        <div class="glow"></div>
+        <span class="glass"></span>
+        <span class="btn-side"></span>
+      </div>
+      <span class="strap down"></span>
     </div>
     <div class="stage-meta">
       <span id="srcInfo">等待素材</span>
@@ -144,7 +150,7 @@
 
     <div class="budget">
       <div class="budget-head">
-        <span>体积预算</span>
+        <span id="budgetLabel">体积预算</span>
         <b id="budgetTotal">—</b>
       </div>
       <div class="bar">

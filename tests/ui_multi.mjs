@@ -69,10 +69,17 @@ const changedRatio = (a, b) => {
   }
   return n / total;
 };
-/** 连拍 3 张取「最接近的一对」，这样动画相位不同也不会误判 */
+/**
+ * 连拍 4 张（间隔 120ms，采样窗 ≈ 480ms ≈ 播放周期的一半以上）取「最接近的一对」，
+ * 这样两张图的动画相位不同也不会误判。
+ *
+ * 前提：a.gif 和 b.gif 必须是**构图不同**的两张画。历史坑：b.gif 原来是 a.gif 的
+ * 换帧数版本（frame0 像素完全一致），于是这条断言只能量到 0.86%，被误当成 app 的 bug。
+ * 换页测试的素材不能是近重复图。
+ */
 async function wallSignature() {
   const shots = [];
-  for (let i = 0; i < 3; i++) { shots.push(await snap()); await page.waitForTimeout(60); }
+  for (let i = 0; i < 4; i++) { shots.push(await snap()); await page.waitForTimeout(120); }
   return shots;
 }
 const sig0 = await wallSignature();
@@ -83,8 +90,8 @@ await page.waitForTimeout(300);
 const sig1 = await wallSignature();
 let best = Infinity;
 for (const a of sig0) for (const b of sig1) best = Math.min(best, changedRatio(a, b));
-// 同一张 GIF 同一相位时该值≈0；换了一张构图相近的 GIF 也有 2%+ 的像素真的变了
-if (best < 0.01) fail.push(`切到第 2 页后画布几乎没变（变化像素 ${(best * 100).toFixed(2)}%）`);
+// 同一张 GIF 同一相位时该值≈0；换了一张构图不同的 GIF 应有 10%+ 的像素真的变了
+if (best < 0.02) fail.push(`切到第 2 页后画布几乎没变（变化像素 ${(best * 100).toFixed(2)}%，应 > 2%）`);
 const onAfterClick = await page.$$eval('#wallList .wall', (els) => els.map((e) => e.classList.contains('on')));
 if (!onAfterClick[1] || onAfterClick[0]) fail.push('点击后高亮没跟到第 2 页');
 await page.screenshot({ path: join(OUT, 'multi-wall2.png') });
