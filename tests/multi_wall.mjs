@@ -3,7 +3,8 @@
  *
  *   node tests/multi_wall.mjs <out.face> <a.gif> <b.gif> [c.gif ...]
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildFaceFromGif } from '../src/core/build.js';
 import { unpackFace } from '../src/core/facebin.js';
@@ -12,6 +13,8 @@ const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const [, , outArg, ...gifArgs] = process.argv;
 // 不给参数就用 golden-src 里的三张 GIF（可直接 `node tests/multi_wall.mjs` 跑）
 const outPath = outArg || here('./out/multi_wall.face');
+// out/ 是 gitignore 里的可再生产物目录，新克隆时不存在 —— 自己建，别依赖它先天就在
+mkdirSync(dirname(outPath), { recursive: true });
 const gifs = gifArgs.length ? gifArgs
   : ['a', 'b', 'c'].map((n) => here(`./golden-src/${n}.gif`));
 const sources = gifs.map((p) => new Uint8Array(readFileSync(p)));

@@ -7,7 +7,7 @@
  *
  *   node tests/clip_fmt.mjs
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { buildFace, clipRange, planFrames, planUniform, encodeFrame } from '../src/core/build.js';
 import { unpackFace, PREVIEW_W, PREVIEW_H } from '../src/core/facebin.js';
@@ -16,6 +16,8 @@ import { coverRGBA } from '../src/core/image.js';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const load = (n) => new Uint8Array(readFileSync(here(`./golden-src/${n}`)));
+// out/ 是 gitignore 里的可再生产物目录，新克隆时不存在 —— 自己建，别依赖它先天就在
+mkdirSync(here('./out'), { recursive: true });
 
 const fail = [];
 const eq = (label, got, want) => {

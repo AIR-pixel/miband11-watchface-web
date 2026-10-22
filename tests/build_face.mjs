@@ -6,7 +6,8 @@
  * 不给参数就用 tests/golden-src/a.gif（可直接 `node tests/build_face.mjs` 跑）。
  * 产物要再用仓库的 tools/verify_face.py 独立验一遍结构（另一步，见 README）。
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildFaceFromGif, asciiField, faceFileName } from '../src/core/build.js';
 import { unpackFace } from '../src/core/facebin.js';
@@ -16,6 +17,8 @@ const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const args = process.argv.slice(2);
 const gifPath = args[0] || here('./golden-src/a.gif');
 const outPath = args[1] || here('./out/build_face.face');
+// out/ 是 gitignore 里的可再生产物目录，新克隆时不存在 —— 自己建，别依赖它先天就在
+mkdirSync(dirname(outPath), { recursive: true });
 const opt = (name, dflt) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : dflt;

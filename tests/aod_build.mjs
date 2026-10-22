@@ -4,7 +4,8 @@
  *
  *   node tests/aod_build.mjs <in.gif> <out.face> [--mode time|both]
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildFaceFromGif } from '../src/core/build.js';
 import { planAod, makeAodImages } from '../src/core/aod.js';
@@ -15,6 +16,8 @@ const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 const args = process.argv.slice(2);
 const gifPath = args[0] || here('./golden-src/a.gif');
 const outPath = args[1] || here('./out/aod_build.face');
+// out/ 是 gitignore 里的可再生产物目录，新克隆时不存在 —— 自己建，别依赖它先天就在
+mkdirSync(dirname(outPath), { recursive: true });
 const mode = args.includes('--mode') ? args[args.indexOf('--mode') + 1] : 'both';
 
 /** 确定性遮罩：把字符码映射成一圈渐变的环，纯粹为了让不同数字的字节不同 */
