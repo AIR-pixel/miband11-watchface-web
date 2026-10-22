@@ -176,11 +176,14 @@ function recomputePlans() {
   parts.push(state.walls.length > 1
     ? `每张壁纸 ${per} 帧，共 ${total} 帧 @ ${fpsTxt}fps。多壁纸默认开启短按切换。`
     : `保留 ${total} 帧 @ ${fpsTxt}fps，原素材 ${(wallDurationMs(state.walls[0]) / 1000).toFixed(2)}s。`);
-  // 裁切生效时把区间也写进提示，否则「原素材 8s / 只留 3s」看着像 bug
+  // 裁切生效时把区间也写进提示，否则「原素材 8s / 只留 3s」看着像 bug。
+  // 「原素材」统一两位小数 —— 同一句里出现 3.84s 和 3.8s，看着像算错了。
   const first = state.walls.find((w) => w.kind !== 'demo');
   if (first && first.plan.clipStartMs > 0) {
     const s = (first.plan.clipStartMs / 1000).toFixed(1);
-    parts.push(`截取 ${s}s 起 ${(first.plan.durationMs / 1000).toFixed(1)}s（原素材 ${(wallDurationMs(first) / 1000).toFixed(1)}s）。`);
+    const d = (first.plan.durationMs / 1000).toFixed(1);
+    const totalTxt = (wallDurationMs(first) / 1000).toFixed(2);
+    parts.push(`截取 ${s}s 起 ${d}s（原素材 ${totalTxt}s）。`);
   }
   if (vids) parts.push(`视频在点「生成」时按 ${total} 个时间点抽帧。`);
   if (total > 320) parts.push('帧数偏多，生成会慢，也吃内存。');
