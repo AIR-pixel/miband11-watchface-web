@@ -131,7 +131,7 @@ ok('哨兵 idx = 第一页帧数', u.sentinelIdx === 12, `得到 ${u.sentinelIdx
 ok('每帧 JPEG 完整（SOI…EOI）',
   imgFiles.every((f) => f.data[0] === 0xff && f.data[1] === 0xd8
     && f.data[f.data.length - 2] === 0xff && f.data[f.data.length - 1] === 0xd9));
-ok('完成提示里报了格式信息', /20 帧/.test(doneHint), doneHint);
+ok('完成提示里报了格式与帧数', /20 帧/.test(doneHint) && /JPEG q70/.test(doneHint), doneHint);
 
 console.log(JSON.stringify({
   srcInfo, pngHint, pngBudget, jpgBudget, q60Budget, clipHint, clipBudget, doneHint,

@@ -161,6 +161,11 @@ python tests/make_fixtures.py        # 素材要重画时跑这个（b.gif / w1.
 EOI 必须跟在熵数据之后，不能写进头部；YUV 转换要用 `Math.round` 而不是 `|0`
 （负数向零截断，整幅图会带上半个色阶的系统偏差）。
 
+**这个编码器验到哪一步**：产物由 Pillow 独立解码（PSNR 见上）、SOF0 采样因子断言 4:4:4、
+装进 `.face` 后 `verify_face.py` 结构校验通过、`.jpg` 帧与 `main.lua` 里的 `EXT` 一致。
+**没做的一件事**：把网页编码出的 `.jpg` 帧表盘装到真机上看。真机能解 JPEG 这件事，是用
+PC 端（Pillow，`subsampling=0`）产的 `.face` 验的 —— 格式上同一条 baseline 路径，
+但不是这一份编码器的产物。这是本仓库目前唯一一处「格式对得上、没上过真机」的地方。
 `tests/jpeg.mjs` 负责守着这些：解出产物的 SOF0 断言三分量全是 `0x11`，再用 Pillow 独立
 解码算 PSNR，并与同质量的 4:2:0 对照比色度 —— 差 10 dB 以上才说明 4:4:4 真的生效了。
 

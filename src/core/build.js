@@ -26,13 +26,10 @@ export const LEVELS = {
   tiny: { colors: 64, label: 'P64 · 极限' },
 };
 
-/** 编码格式。JPEG 走自研 4:4:4 编码器（浏览器原生的恒为 4:2:0，见 jpeg.js 头部说明） */
-export const FORMATS = {
-  png: { label: 'PNG（无损调色板）', ext: 'png' },
-  jpg: { label: 'JPEG（有损，4:4:4）', ext: 'jpg' },
-};
-
-export const JPG_QUALITY_OPTIONS = [90, 85, 80, 70, 60];
+/**
+ * 默认 JPEG 质量。界面上的档位（90/85/80/70/60）写在 index.html 里，编码器本身
+ * 认任意 1..100 —— 不需要和这里保持同步，这里只给「没传参时用哪个」。
+ */
 export const JPG_QUALITY = 80;
 
 /**

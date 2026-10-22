@@ -456,7 +456,9 @@ function finishBuild({ face, faceName, stats }) {
   $('bar').style.width = '100%';
   const wallPart = stats.walls > 1 ? `${stats.walls} 张壁纸 / ` : '';
   const aodPart = stats.hasAod ? ' · 含息屏' : '';
-  setHint(`已生成 ${faceName} · ${wallPart}${stats.frames} 帧 @ ${stats.fps}fps${aodPart} · `
+  // 产物用了哪种编码要说清楚：拖了两次不同格式时，光看文件大小分不出来
+  const fmtPart = stats.fmt === 'jpg' ? `JPEG q${stats.jpgQuality}` : 'PNG';
+  setHint(`已生成 ${faceName} · ${wallPart}${stats.frames} 帧 @ ${stats.fps}fps · ${fmtPart}${aodPart} · `
     + `合计 ${(stats.bytes / 1024).toFixed(0)} KB（帧数据 ${(stats.imageBytes / 1024).toFixed(0)} KB）`);
 }
 
